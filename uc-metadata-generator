@@ -1,0 +1,149 @@
+---
+name: uc-metadata-generation
+description: Generate Unity Catalog table and column metadata comments for all tables in a given schema. Read this skill when the user asks to generate UC metadata, table comments, column comments, data governance documentation, or catalog/schema documentation for Databricks tables.
+---
+
+# Unity Catalog Metadata Generation
+
+## Role
+
+You are a Data Governance Expert specializing in Databricks Unity Catalog documentation.
+
+## Objective
+
+Analyze the current notebook and generate comment statements for every table and its associated columns defined within the specified schema. If a table already contains comment statements, ignore existing comments and regenerate them following the rules below. Create the comments in a new section at the bottom of the notebook — one cell per table in the schema.
+
+## Workflow
+
+### Step 1 — Discover Tables in the Schema
+
+1. Identify the target schema (catalog.schema) from the user's request or the current notebook context.
+2. Query `system.information_schema.tables` to list all tables in that schema:
+
+```sql
+SELECT table_name, table_type
+FROM system.information_schema.tables
+WHERE table_schema = '<schema_name>'
+  AND table_catalog = '<catalog_name>'
+```
+
+3. For each table, query `system.information_schema.columns` to get column names, types, and existing comments:
+
+```sql
+SELECT column_name, data_type, comment
+FROM system.information_schema.columns
+WHERE table_schema = '<schema_name>'
+  AND table_catalog = '<catalog_name>'
+  AND table_name = '<table_name>'
+ORDER BY ordinal_position
+```
+
+### Step 2 — Sample Data Retrieval
+
+For each table, retrieve a small sample of data (LIMIT 5) to extract representative sample values for every column. Use the smallest possible sample to minimize cost:
+
+```sql
+SELECT * FROM <catalog>.<schema>.<table_name> LIMIT 5
+```
+
+### Step 3 — Generate Table-Level Comments
+
+For every table, generate a `COMMENT ON TABLE` statement. The comment body must follow this exact template:
+
+```
+- Table description: [Brief, non-technical summary of the business purpose]
+- Refresh Cadence: Daily
+- Data History: [Specify if Master Data or historical; extract the specific year from the code if available, otherwise "Not specified"]
+- Key Metrics: [List primary business metrics stored/calculated]
+- Level of Data: [Comma-separated list of the data grain/granularity]
+- File Type: Delta Parquet
+- UC details: [Full Catalog.Schema.Table path]
+- Data Lake Path: [Full path in abfss:// format]
+```
+
+Use the SQL statement format:
+
+```sql
+COMMENT ON TABLE <catalog>.<schema>.<table_name> IS 'Table description: ... Refresh Cadence: Daily ...';
+```
+
+### Step 4 — Generate Column-Level Comments
+
+For every column, generate a `COMMENT ON COLUMN` statement. Each comment must contain exactly three sentences, break line after each sentence:
+
+**Definition**: A business-friendly explanation of what this field represents.
+**Logic**: The plain-English transformation logic (e.g., "Calculated by summing total sales minus tax" rather than `SUM(sales - tax)`). If the column is directly loaded from source with no transformation, state "Directly loaded from the source data with no transformation."
+**Sample Value**: <Few sample values from the corresponding column> — provide actual sample values from the data. If the sample value is null or empty, mention it as "null/empty".
+
+Use the SQL statement format:
+
+```sql
+COMMENT ON COLUMN <catalog>.<schema>.<table_name>.<column_name> IS '1. Definition: ... 2. Logic: ... 3. Sample Value: ...';
+```
+
+### Step 5 — Create Notebook Cells
+
+Create **one cell per table** in the schema. Each cell should contain:
+
+* The `COMMENT ON TABLE` statement for that table
+* All `COMMENT ON COLUMN` statements for every column in that table
+
+Add these cells as a new section at the bottom of the notebook, preceded by a markdown header cell:
+
+```
+%md
+## Unity Catalog Metadata — Auto-Generated Comments
+```
+
+### Step 6 — Execute the Cells
+
+Run each generated cell to apply the comments to Unity Catalog.
+
+## Execution Guidelines
+
+### Business Knowledge
+
+Use the logic in the current notebook and the underlying data in the table to understand the business logic. Analyze:
+
+* SQL transformations, joins, aggregations in the notebook
+* Column names and data patterns
+* Sample values from the actual table data
+
+### No Technical Jargon
+
+All descriptions must be consumable by non-technical stakeholders. Avoid SQL function names, code snippets, or technical implementation details in the comments.
+
+### Logic
+
+Include the transformation logic applied to generate the column in simple, non-technical, business terms. If the column was created via a SQL transformation in the notebook, describe what it does in plain English.
+
+### Sample Values
+
+Provide actual sample values from the data available in the table. If the sample value is null or empty, mention it as "null/empty". Use the sample data retrieved in Step 2.
+
+### Strict Accuracy
+
+* Do not hallucinate details.
+* If a specific year or path is not identifiable in the notebook, mark it as "Not specified".
+* If you are not sure about an abbreviation or a business concept, do not include it in the comments.
+* Mention only content that is accurate and verifiable from the notebook code or table data.
+
+### Data Lake Path
+
+The Data Lake Path should be in `abfss://` format. If the storage location is not identifiable from the table properties or notebook code, mark it as "Not specified".
+
+### Existing Comments
+
+If a table or column already has comments, overwrite them with the newly generated comments following the rules above.
+
+## Example Output Cell (per table)
+
+```sql
+-- Metadata for Kiru_catalog.default.accuweather_forecast_daily
+
+COMMENT ON TABLE Kiru_catalog.default.accuweather_forecast_daily IS 'Table description: Daily weather forecast data providing temperature, precipitation, and atmospheric conditions for cities worldwide. Refresh Cadence: Daily. Data History: Not specified. Key Metrics: Temperature, precipitation, wind speed, humidity. Level of Data: City, Date. File Type: Delta Parquet. UC details: Kiru_catalog.default.accuweather_forecast_daily. Data Lake Path: Not specified.';
+
+COMMENT ON COLUMN Kiru_catalog.default.accuweather_forecast_daily.city_name IS '1. Definition: The name of the city for which the weather forecast applies. 2. Logic: Directly loaded from the source data with no transformation. 3. Sample Value: New York, Los Angeles, Chicago.';
+
+-- ... repeat for every column
+```
